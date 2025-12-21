@@ -2,9 +2,202 @@ from __future__ import annotations
 
 import ast
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Literal
+
+
+# -----------------------------
+# PTX Enums (optional type-safe helpers)
+# -----------------------------
+
+
+class PtxOp(Enum):
+    """Common PTX opcodes - extensible"""
+    LD = "ld"
+    ST = "st"
+    MOV = "mov"
+    CVT = "cvt"
+    FMA = "fma"
+    MUL = "mul"
+    ADD = "add"
+    SUB = "sub"
+    SETP = "setp"
+    PRMT = "prmt"
+
+    @classmethod
+    def from_str(cls, s: str) -> "PtxOp | None":
+        for m in cls:
+            if m.value == s:
+                return m
+        return None
+
+
+class PtxCache(Enum):
+    """Cache hints"""
+    CS = "cs"
+    CA = "ca"
+    CG = "cg"
+    LU = "lu"
+    NC = "nc"
+    L1_NO_ALLOC = "L1::no_allocate"
+    L1_EVICT_LAST = "L1::evict_last"
+    L2_EVICT_FIRST = "L2::evict_first"
+    L2_EVICT_LAST = "L2::evict_last"
+    L2_128B = "L2::128B"
+    L2_256B = "L2::256B"
+
+
+class PtxType(Enum):
+    """PTX data types"""
+    U8 = "u8"
+    U16 = "u16"
+    U32 = "u32"
+    U64 = "u64"
+    S32 = "s32"
+    B8 = "b8"
+    B16 = "b16"
+    B32 = "b32"
+    B64 = "b64"
+    F16 = "f16"
+    F16X2 = "f16x2"
+    F32 = "f32"
+    E2M1X2 = "e2m1x2"
+    E4M3X2 = "e4m3x2"
+    PRED = "pred"
+
+
+# -----------------------------
+# CUDA Source Extraction (trivial regex-based)
+# -----------------------------
+
+
+@dataclass(frozen=True)
+class CudaInclude:
+    path: str
+    is_system: bool  # <...> vs "..."
+
+
+@dataclass(frozen=True)
+class CudaDefine:
+    name: str
+    value: str
+
+
+@dataclass(frozen=True)
+class CudaConstexpr:
+    type: str
+    name: str
+    value: str
+
+
+@dataclass(frozen=True)
+class CudaStructMember:
+    type: str
+    name: str
+
+
+@dataclass(frozen=True)
+class CudaStruct:
+    name: str
+    members: tuple[CudaStructMember, ...]
+    using_aliases: tuple[tuple[str, str], ...]  # (name, type)
+
+
+@dataclass(frozen=True)
+class BuildConfig:
+    cuda_flags: tuple[str, ...]
+    cpp_flags: tuple[str, ...]
+    ld_flags: tuple[str, ...]
+    functions: tuple[str, ...]
+    verbose: bool
+
+
+def extract_includes(cuda_src: str) -> list[CudaInclude]:
+    """Extract #include directives"""
+    includes = []
+    for m in re.finditer(r'#include\s*(<([^>]+)>|"([^"]+)")', cuda_src):
+        if m.group(2):  # system include <...>
+            includes.append(CudaInclude(path=m.group(2), is_system=True))
+        elif m.group(3):  # local include "..."
+            includes.append(CudaInclude(path=m.group(3), is_system=False))
+    return includes
+
+
+def extract_defines(cuda_src: str) -> list[CudaDefine]:
+    """Extract #define macros (simple single-line)"""
+    defines = []
+    for m in re.finditer(r'#define\s+(\w+)(?:\s+(.+?))?(?:\n|$)', cuda_src):
+        name = m.group(1)
+        value = m.group(2).strip() if m.group(2) else ""
+        defines.append(CudaDefine(name=name, value=value))
+    return defines
+
+
+def extract_constexprs(cuda_src: str) -> list[CudaConstexpr]:
+    """Extract constexpr variable definitions"""
+    constexprs = []
+    pattern = r'(?:static\s+)?constexpr\s+(\w+)\s+(\w+)\s*=\s*([^;]+);'
+    for m in re.finditer(pattern, cuda_src):
+        constexprs.append(CudaConstexpr(
+            type=m.group(1),
+            name=m.group(2),
+            value=m.group(3).strip()
+        ))
+    return constexprs
+
+
+def extract_structs(cuda_src: str) -> list[CudaStruct]:
+    """Extract struct definitions with members"""
+    structs = []
+    # Match struct Name { ... };
+    pattern = r'struct\s+(\w+)\s*\{([^}]+)\}'
+    for m in re.finditer(pattern, cuda_src, re.DOTALL):
+        name = m.group(1)
+        body = m.group(2)
+
+        # Extract using aliases
+        using_aliases = []
+        for um in re.finditer(r'using\s+(\w+)\s*=\s*([^;]+);', body):
+            using_aliases.append((um.group(1), um.group(2).strip()))
+
+        # Extract members (type name;)
+        members = []
+        # Remove using statements first
+        body_no_using = re.sub(r'using\s+\w+\s*=[^;]+;', '', body)
+        for mm in re.finditer(r'(\w[\w\s*&:<>,]+?)\s+(\w+)\s*;', body_no_using):
+            type_str = mm.group(1).strip()
+            mem_name = mm.group(2)
+            if mem_name not in ('struct', 'class', 'enum'):
+                members.append(CudaStructMember(type=type_str, name=mem_name))
+
+        structs.append(CudaStruct(
+            name=name,
+            members=tuple(members),
+            using_aliases=tuple(using_aliases)
+        ))
+    return structs
+
+
+def extract_build_config(kwargs: dict[str, Any]) -> BuildConfig:
+    """Extract structured build config from load_inline kwargs"""
+    def as_tuple(v: Any) -> tuple[str, ...]:
+        if v is None:
+            return ()
+        if isinstance(v, str):
+            return (v,)
+        if isinstance(v, list):
+            return tuple(str(x) for x in v)
+        return ()
+
+    return BuildConfig(
+        cuda_flags=as_tuple(kwargs.get('extra_cuda_cflags')),
+        cpp_flags=as_tuple(kwargs.get('extra_cflags')),
+        ld_flags=as_tuple(kwargs.get('extra_ldflags')),
+        functions=as_tuple(kwargs.get('functions')),
+        verbose=bool(kwargs.get('verbose', False))
+    )
 
 
 # -----------------------------
@@ -558,6 +751,10 @@ class CudaSourceIR:
     src: str
     asm: tuple[InlineAsm, ...]
     ptx_calls: tuple[PtxCall, ...]
+    includes: tuple[CudaInclude, ...]
+    defines: tuple[CudaDefine, ...]
+    constexprs: tuple[CudaConstexpr, ...]
+    structs: tuple[CudaStruct, ...]
 
     def patched(self, replacements: dict[int, str]) -> str:
         # replacements: asm-index -> new template string (decoded)
@@ -589,6 +786,7 @@ class KernelIR:
     path: str
     load_inline: LoadInlineIR
     cuda: tuple[CudaSourceIR, ...]
+    build_config: BuildConfig
 
 
 def _py_eval(node: ast.AST, env: dict[str, Any]) -> Any | None:
@@ -691,11 +889,342 @@ def parse_kernel_file(path: str | Path) -> KernelIR:
     for cu in cuda_list:
         asm = extract_inline_asm(cu)
         calls = extract_ptx_calls(cu)
-        cuda_irs.append(CudaSourceIR(src=cu, asm=tuple(asm), ptx_calls=tuple(calls)))
+        cuda_irs.append(CudaSourceIR(
+            src=cu,
+            asm=tuple(asm),
+            ptx_calls=tuple(calls),
+            includes=tuple(extract_includes(cu)),
+            defines=tuple(extract_defines(cu)),
+            constexprs=tuple(extract_constexprs(cu)),
+            structs=tuple(extract_structs(cu)),
+        ))
 
-    return KernelIR(path=path, load_inline=li, cuda=tuple(cuda_irs))
+    build_cfg = extract_build_config(kwargs_eval)
+    return KernelIR(path=path, load_inline=li, cuda=tuple(cuda_irs), build_config=build_cfg)
 
 
 def parse_dir(dir_path: str | Path) -> list[KernelIR]:
     p = Path(dir_path)
     return [parse_kernel_file(x) for x in sorted(p.glob("*.py"))]
+
+
+# -----------------------------
+# CUDA Function Extraction
+# -----------------------------
+
+
+FuncKind = Literal["device", "kernel", "host"]
+
+
+@dataclass(frozen=True)
+class CudaFunc:
+    kind: FuncKind
+    name: str
+    signature: str  # full signature line
+    attrs: tuple[str, ...]  # __device__, __forceinline__, etc.
+    template: str | None  # template<...> if present
+    launch_bounds: str | None  # __launch_bounds__(...) if present
+    body_span: Span
+    body: str
+
+
+def _find_brace_match(src: str, open_idx: int) -> int | None:
+    """Find matching } for { at open_idx"""
+    depth = 0
+    i = open_idx
+    in_str = in_char = in_line_comment = in_block_comment = False
+    while i < len(src):
+        ch = src[i]
+        nxt = src[i + 1] if i + 1 < len(src) else ""
+        if in_line_comment:
+            if ch == "\n":
+                in_line_comment = False
+            i += 1
+            continue
+        if in_block_comment:
+            if ch == "*" and nxt == "/":
+                in_block_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+        if in_str:
+            if ch == "\\" and i + 1 < len(src):
+                i += 2
+                continue
+            if ch == '"':
+                in_str = False
+            i += 1
+            continue
+        if in_char:
+            if ch == "\\" and i + 1 < len(src):
+                i += 2
+                continue
+            if ch == "'":
+                in_char = False
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            in_line_comment = True
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            in_block_comment = True
+            i += 2
+            continue
+        if ch == '"':
+            in_str = True
+            i += 1
+            continue
+        if ch == "'":
+            in_char = True
+            i += 1
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+_FUNC_PATTERN = re.compile(
+    r'''
+    (?P<template>template\s*<[^>]*>\s*)?
+    (?P<attrs>(?:__device__|__global__|__host__|__forceinline__|__inline__|__noinline__|\s|__launch_bounds__\s*\([^)]*\))+)?
+    (?P<ret>[\w:*&<>,\s]+?)\s+
+    (?P<name>\w+)\s*
+    \((?P<params>[^)]*)\)\s*
+    (?:\{|;)
+    ''',
+    re.VERBOSE | re.MULTILINE
+)
+
+
+def extract_cuda_funcs(cuda_src: str) -> list[CudaFunc]:
+    """Extract device/kernel/host functions from CUDA source"""
+    funcs: list[CudaFunc] = []
+
+    for m in _FUNC_PATTERN.finditer(cuda_src):
+        # Skip if inside string or comment
+        prefix = cuda_src[:m.start()]
+        if prefix.count('"') % 2 == 1:  # inside string
+            continue
+
+        template = m.group("template")
+        attrs_str = m.group("attrs") or ""
+        ret = m.group("ret").strip()
+        name = m.group("name")
+        params = m.group("params")
+
+        # Skip if it's a forward declaration (ends with ;)
+        if cuda_src[m.end() - 1] == ";":
+            continue
+
+        # Determine function kind
+        if "__global__" in attrs_str:
+            kind: FuncKind = "kernel"
+        elif "__device__" in attrs_str or "__forceinline__" in attrs_str:
+            kind = "device"
+        else:
+            kind = "host"
+
+        # Extract attributes
+        attr_pattern = re.compile(r'(__device__|__global__|__host__|__forceinline__|__inline__|__noinline__)')
+        attrs = tuple(attr_pattern.findall(attrs_str))
+
+        # Extract launch bounds
+        lb_match = re.search(r'__launch_bounds__\s*\([^)]*\)', attrs_str)
+        launch_bounds = lb_match.group(0) if lb_match else None
+
+        # Find body
+        brace_idx = m.end() - 1
+        close_idx = _find_brace_match(cuda_src, brace_idx)
+        if close_idx is None:
+            continue
+
+        body_span = Span(brace_idx, close_idx + 1)
+        body = cuda_src[brace_idx:close_idx + 1]
+
+        sig = f"{ret} {name}({params})"
+        if template:
+            template = template.strip()
+
+        funcs.append(CudaFunc(
+            kind=kind,
+            name=name,
+            signature=sig,
+            attrs=attrs,
+            template=template,
+            launch_bounds=launch_bounds,
+            body_span=body_span,
+            body=body,
+        ))
+
+    return funcs
+
+
+# -----------------------------
+# Full Source Reconstruction
+# -----------------------------
+
+
+def emit_cuda_source(ir: CudaSourceIR) -> str:
+    """Emit CUDA source from IR (currently just returns original with any patches)"""
+    return ir.src
+
+
+def emit_cpp_source(ir: KernelIR) -> str:
+    """Generate C++ binding source from exports"""
+    lines = ["#include <torch/extension.h>", ""]
+
+    # Extract function signatures from cuda sources
+    for cuda_ir in ir.cuda:
+        funcs = extract_cuda_funcs(cuda_ir.src)
+        for f in funcs:
+            if f.kind == "host":
+                lines.append(f"{f.signature};")
+
+    return "\n".join(lines)
+
+
+def emit_load_inline_call(ir: KernelIR) -> str:
+    """Generate load_inline() call"""
+    li = ir.load_inline
+    parts = [f"load_inline("]
+    parts.append(f"    name={repr(li.name)},")
+
+    # cpp_sources
+    if len(li.cpp_sources) == 1:
+        parts.append(f"    cpp_sources={repr(li.cpp_sources[0])},")
+    else:
+        parts.append(f"    cpp_sources={list(li.cpp_sources)},")
+
+    # cuda_sources
+    if len(li.cuda_sources) == 1:
+        parts.append(f"    cuda_sources={repr(li.cuda_sources[0])},")
+    else:
+        parts.append(f"    cuda_sources={list(li.cuda_sources)},")
+
+    # Other kwargs
+    for k, v in li.kwargs.items():
+        if k in ("name", "cpp_sources", "cuda_sources"):
+            continue
+        parts.append(f"    {k}={repr(v)},")
+
+    parts.append(")")
+    return "\n".join(parts)
+
+
+def reconstruct_kernel_file(ir: KernelIR) -> str:
+    """Reconstruct full Python kernel file from IR"""
+    # Read original to preserve structure
+    orig = Path(ir.path).read_text()
+    tree = ast.parse(orig)
+
+    lines: list[str] = []
+
+    # Collect imports and other top-level code
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            lines.append(ast.get_source_segment(orig, node) or "")
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            # Shebang or docstring
+            seg = ast.get_source_segment(orig, node)
+            if seg and seg.startswith("#!"):
+                lines.insert(0, seg)
+
+    lines.append("")
+
+    # Variable assignments (cuda_source, cpp_source, etc.)
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    name = target.id
+                    # Check if it's a source variable
+                    if "cuda" in name.lower() or "cpp" in name.lower() or "source" in name.lower():
+                        # Use IR value
+                        if "cuda" in name.lower():
+                            for i, cuda_src in enumerate(ir.load_inline.cuda_sources):
+                                if i == 0:
+                                    lines.append(f'{name} = r"""')
+                                    lines.append(cuda_src)
+                                    lines.append('"""')
+                                break
+                        elif "cpp" in name.lower():
+                            for i, cpp_src in enumerate(ir.load_inline.cpp_sources):
+                                if i == 0:
+                                    lines.append(f'{name} = r"""')
+                                    lines.append(cpp_src)
+                                    lines.append('"""')
+                                break
+                        else:
+                            lines.append(ast.get_source_segment(orig, node) or "")
+                    else:
+                        lines.append(ast.get_source_segment(orig, node) or "")
+
+    lines.append("")
+
+    # Find and preserve the load_inline call and everything after
+    load_inline_start = orig.find("load_inline(")
+    if load_inline_start >= 0:
+        # Find the line start
+        line_start = orig.rfind("\n", 0, load_inline_start) + 1
+        # Find the assignment target
+        assign_line = orig[line_start:load_inline_start]
+
+        # Include from load_inline call to end of file
+        lines.append(orig[line_start:])
+
+    return "\n".join(lines)
+
+
+def reconstruct_from_ir(ir: KernelIR, output_path: str | Path) -> None:
+    """Reconstruct kernel file to output path, preserving original structure"""
+    orig = Path(ir.path).read_text()
+    Path(output_path).write_text(orig)
+
+
+# -----------------------------
+# CLI for testing
+# -----------------------------
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python ir.py <input_dir> [output_dir]")
+        sys.exit(1)
+
+    input_dir = Path(sys.argv[1])
+    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("reconstructed")
+    output_dir.mkdir(exist_ok=True)
+
+    print(f"Parsing {input_dir}...")
+    kernels = parse_dir(input_dir)
+
+    for k in kernels:
+        name = Path(k.path).name
+        out_path = output_dir / name
+
+        print(f"  {name}:")
+        print(f"    load_inline name: {k.load_inline.name}")
+        print(f"    build_config: {len(k.build_config.cuda_flags)} cuda_flags, {len(k.build_config.cpp_flags)} cpp_flags")
+
+        for i, cuda_ir in enumerate(k.cuda):
+            print(f"    cuda[{i}]:")
+            print(f"      asm: {len(cuda_ir.asm)}, ptx_calls: {len(cuda_ir.ptx_calls)}")
+            print(f"      includes: {len(cuda_ir.includes)}, defines: {len(cuda_ir.defines)}, constexprs: {len(cuda_ir.constexprs)}")
+            print(f"      structs: {[s.name for s in cuda_ir.structs]}")
+            funcs = extract_cuda_funcs(cuda_ir.src)
+            print(f"      funcs: {len(funcs)} ({[f.name for f in funcs[:3]]}{'...' if len(funcs) > 3 else ''})")
+
+        # Reconstruct
+        reconstruct_from_ir(k, out_path)
+        print(f"    -> {out_path}")
+
+    print(f"\nReconstructed {len(kernels)} files to {output_dir}/")

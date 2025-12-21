@@ -1,6 +1,7 @@
 venv/
 out/
 gemv_subs/
+reconstructed/
 .claude/
 *.pyc
 __pycache__/
