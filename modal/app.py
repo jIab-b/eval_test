@@ -10,9 +10,9 @@ import modal
 
 APP_NAME = "nv_app"
 VOLUME_NAME = "nv_vol"
-BASE_IMAGE = "pytorch/pytorch:2.9.1-cuda13.0-cudnn9-devel"
+#BASE_IMAGE = "pytorch/pytorch:2.9.1-cuda13.0-cudnn9-devel"
 #BASE_IMAGE = "nvidia/cuda:13.1.0-devel-ubuntu24.04"
-#BASE_IMAGE = "nvcr.io/nvidia/pytorch:25.11-py3"
+BASE_IMAGE = "nvcr.io/nvidia/pytorch:25.11-py3"
 IMAGE_ENV = {
     "HF_HOME": "/workspace/hf",
     "HUGGINGFACE_HUB_CACHE": "/workspace/hf",
@@ -27,6 +27,8 @@ APT_PACKAGES = [
     "graphviz",
 ]
 UV_PACKAGES = [
+ #   "torch==2.9.1",
+    "nvidia-cutlass-dsl",
     "nvtx",
     "pydot",
 ]
