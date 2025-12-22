@@ -1,0 +1,25 @@
+compile: start
+compile: pass
+benchmark-count: 3
+benchmark.0.spec: m: 128; n: 7168; k: 16384; l: 1; seed: 1111
+benchmark.0.runs: 200
+benchmark.0.mean: 42546.71961069107
+benchmark.0.std: 14644.085689082409
+benchmark.0.err: 1035.4932295027047
+benchmark.0.best: 35840.000957250595
+benchmark.0.worst: 160799.9950647354
+benchmark.1.spec: m: 128; n: 4096; k: 7168; l: 1; seed: 1111
+benchmark.1.runs: 200
+benchmark.1.mean: 29560.640025883913
+benchmark.1.std: 15248.765208450734
+benchmark.1.err: 1078.250528361701
+benchmark.1.best: 22048.000246286392
+benchmark.1.worst: 152671.99277877808
+benchmark.2.spec: m: 128; n: 7168; k: 2048; l: 1; seed: 1111
+benchmark.2.runs: 200
+benchmark.2.mean: 30556.959994137287
+benchmark.2.std: 28620.641279653442
+benchmark.2.err: 2023.7849530750575
+benchmark.2.best: 20384.00061428547
+benchmark.2.worst: 382656.0080051422
+check: pass

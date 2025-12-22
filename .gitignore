@@ -7,4 +7,4 @@ reconstructed/
 .claude/
 *.pyc
 __pycache__/
-*.txt
+
