@@ -10,12 +10,14 @@ import modal
 
 APP_NAME = "nv_app"
 VOLUME_NAME = "nv_vol"
-#BASE_IMAGE = "pytorch/pytorch:2.9.1-cuda13.0-cudnn9-devel"
+BASE_IMAGE = "pytorch/pytorch:2.9.1-cuda13.0-cudnn9-devel"
 #BASE_IMAGE = "nvidia/cuda:13.1.0-devel-ubuntu24.04"
-BASE_IMAGE = "nvcr.io/nvidia/pytorch:25.11-py3"
+#BASE_IMAGE = "nvcr.io/nvidia/pytorch:25.11-py3"
+#BASE_IMAGE  = "nvcr.io/nvidia/pytorch:25.09-py3"
+
 IMAGE_ENV = {
-    "HF_HOME": "/workspace/hf",
-    "HUGGINGFACE_HUB_CACHE": "/workspace/hf",
+    "HF_HOME": "/modal_data/hf",
+    "HUGGINGFACE_HUB_CACHE": "/modal_data/hf",
 }
 RUN_COMMANDS = [
     "apt-get update && apt-get install -y curl ca-certificates gnupg",
@@ -43,7 +45,7 @@ GPU_ALIASES = {
 
 LOCAL_WORKSPACE = Path("nvfp4")
 LOCAL_OUTPUTS = Path("out_local")
-VOLUME_MOUNT_PATH = PurePosixPath("/workspace")
+VOLUME_MOUNT_PATH = PurePosixPath("/modal_data")
 
 
 def _to_volume_path(container_path: PurePosixPath) -> PurePosixPath:
@@ -58,8 +60,8 @@ def _to_volume_path(container_path: PurePosixPath) -> PurePosixPath:
     return PurePosixPath("/") / relative
 
 
-REMOTE_WORKSPACE = PurePosixPath("/workspace/nvfp4")
-REMOTE_OUTPUTS = PurePosixPath("/workspace/nvfp4/out_local")
+REMOTE_WORKSPACE = PurePosixPath("/modal_data/nvfp4")
+REMOTE_OUTPUTS = PurePosixPath("/modal_data/nvfp4/out_local")
 VOLUME_WORKSPACE_PATH = _to_volume_path(REMOTE_WORKSPACE)
 VOLUME_OUTPUTS_PATH = _to_volume_path(REMOTE_OUTPUTS)
 
@@ -90,7 +92,7 @@ volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 image = _build_image()
 
 
-@app.function(image=image, volumes={"/workspace": volume}, gpu=_gpu_type())
+@app.function(image=image, volumes={str(VOLUME_MOUNT_PATH): volume}, gpu=_gpu_type())
 def build_image_remote() -> None:
     """Build the container image on Modal."""
 
@@ -158,9 +160,9 @@ def sync_outputs() -> None:
     _sync_outputs_impl(verbose=True)
 
 
-@app.function(image=image, volumes={"/workspace": volume}, gpu=_gpu_type())
+@app.function(image=image, volumes={str(VOLUME_MOUNT_PATH): volume}, gpu=_gpu_type())
 def run_profile_script() -> None:
-    subprocess.run(["/bin/bash", "profile_test.sh"], cwd="/workspace/nvfp4", check=True)
+    subprocess.run(["/bin/bash", "profile_test.sh"], cwd=str(REMOTE_WORKSPACE), check=True)
 
 
 @app.local_entrypoint()
@@ -173,12 +175,12 @@ def profile_and_fetch() -> None:
         print("Profile completed, but no outputs were found to download.")
 
 
-@app.function(image=image, volumes={"/workspace": volume})
+@app.function(image=image, volumes={str(VOLUME_MOUNT_PATH): volume})
 def volume_shell() -> None:
     """Dummy function spec for opening a Modal shell with the workspace volume mounted."""
 
 
-@app.function(image=image, volumes={"/workspace": volume}, gpu=_gpu_type())
+@app.function(image=image, volumes={str(VOLUME_MOUNT_PATH): volume}, gpu=_gpu_type())
 def gpu_shell() -> None:
     """Dummy function spec for opening a Modal shell with both the volume and GPU attached."""
 
@@ -268,11 +270,11 @@ EVAL_SCRIPTS = {
 }
 
 
-@app.function(image=image, volumes={"/workspace": volume}, gpu=_gpu_type(), timeout=600)
+@app.function(image=image, volumes={str(VOLUME_MOUNT_PATH): volume}, gpu=_gpu_type(), timeout=600)
 def run_eval(submission_code: str, tests_content: str, mode: str = "test", workspace_name: str = "nvfp4_gemv") -> str:
     """Run eval remotely with given submission and tests."""
     import sys
-    work = Path(f"/workspace/{workspace_name}")
+    work = Path(f"{VOLUME_MOUNT_PATH}/{workspace_name}")
     work.mkdir(exist_ok=True)
 
     # Write submission and tests

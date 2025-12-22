@@ -8,7 +8,6 @@ import sys
 import math
 from pathlib import Path
 from typing import Any, Optional
-import tempfile
 
 import torch.cuda
 from cutlass.cute.nvgpu.common import OpError
@@ -416,34 +415,7 @@ def main():
     seed = int(seed) if seed else None
     set_seed(seed or 42)
 
-    filename = None
-
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-
-        def build_test_string(tests: list[dict]):
-            as_str = ""
-            for test in tests:
-                kvs = []
-                for k, v in test.items():
-                    kvs.append(f"{k}: {v}")
-                as_str += "; ".join(kvs) + "\n"
-            return as_str
-
-        import yaml
-
-        yaml_content = yaml.safe_load(open(sys.argv[2], "r"))
-        if mode == "test":
-            tests_str = build_test_string(yaml_content.get("tests", []))
-        elif mode in ("benchmark", "leaderboard", "profile"):
-            tests_str = build_test_string(yaml_content.get("benchmarks", []))
-
-        tmp.write(tests_str.encode("utf-8"))
-        tmp.flush()
-        filename = tmp.name
-
-    tests = get_test_cases(filename, seed)
-
-    os.unlink(filename)
+    tests = get_test_cases(sys.argv[2], seed)
 
     with PopcornOutput(int(fd)) as logger:
         import multiprocessing
