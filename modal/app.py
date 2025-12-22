@@ -184,24 +184,39 @@ def gpu_shell() -> None:
 # --- Hash-based sync ---
 PROJECT_ROOT = Path(__file__).parent.parent
 MANIFEST_PATH = "/manifest.json"
-SYNC_DIRS = ["eval"]
+EVAL_DIR = PROJECT_ROOT / "eval"
+
+# Task directories to sync (each becomes /workspace/{dir_name}/)
+# Each task folder is self-contained with its own utils.py, reference.py, task.py, eval_better_bench.py
+TASK_DIRS = ["nvfp4_gemv", "nvfp4_gemm", "nvfp4_dual_gemm"]
 
 
 def _file_hash(path: Path) -> str:
     return hashlib.md5(path.read_bytes()).hexdigest()
 
 
-def _get_local_manifest(root: Path, dirs: list[str]) -> dict[str, str]:
-    manifest = {}
-    for d in dirs:
-        dir_path = root / d
-        if not dir_path.exists():
-            continue
-        for f in dir_path.rglob("*"):
-            if f.is_file() and not f.name.endswith(":Zone.Identifier"):
-                rel = str(f.relative_to(root))
-                manifest[rel] = _file_hash(f)
-    return manifest
+def _get_sync_mapping() -> dict[str, tuple[Path, str]]:
+    """Build mapping of manifest_key -> (local_path, remote_path) for all task files."""
+    mapping = {}
+
+    for task_dir in TASK_DIRS:
+        task_local_dir = EVAL_DIR / task_dir
+
+        # Sync all files from task directory to /workspace/{task_dir}/
+        if task_local_dir.exists():
+            for f in task_local_dir.iterdir():
+                if f.is_file() and not f.name.endswith(":Zone.Identifier"):
+                    manifest_key = f"{task_dir}/{f.name}"
+                    remote_path = f"/{task_dir}/{f.name}"
+                    mapping[manifest_key] = (f, remote_path)
+
+    return mapping
+
+
+def _get_local_manifest() -> dict[str, str]:
+    """Build manifest with hashes for all files to sync."""
+    mapping = _get_sync_mapping()
+    return {key: _file_hash(local_path) for key, (local_path, _) in mapping.items()}
 
 
 def _get_remote_manifest() -> dict[str, str]:
@@ -214,7 +229,8 @@ def _get_remote_manifest() -> dict[str, str]:
 
 def sync_project() -> int:
     """Sync project files to volume, uploading only changed files."""
-    local = _get_local_manifest(PROJECT_ROOT, SYNC_DIRS)
+    mapping = _get_sync_mapping()
+    local = {key: _file_hash(local_path) for key, (local_path, _) in mapping.items()}
     remote = _get_remote_manifest()
 
     changed = [k for k, v in local.items() if remote.get(k) != v]
@@ -231,9 +247,8 @@ def sync_project() -> int:
         manifest_tmp = f.name
 
     with volume.batch_upload(force=True) as batch:
-        for rel in changed:
-            local_path = PROJECT_ROOT / rel
-            remote_path = f"/{rel}"
+        for key in changed:
+            local_path, remote_path = mapping[key]
             batch.put_file(str(local_path), remote_path)
         batch.put_file(manifest_tmp, MANIFEST_PATH)
 
@@ -243,16 +258,27 @@ def sync_project() -> int:
 
 
 # --- Remote eval ---
+# Eval script name per task
+EVAL_SCRIPTS = {
+    "nvfp4_gemv": "eval_better_bench.py",
+    "nvfp4_gemm": "eval.py",
+    "nvfp4_dual_gemm": "eval.py",
+}
+
+
 @app.function(image=image, volumes={"/workspace": volume}, gpu=_gpu_type(), timeout=600)
-def run_eval(submission_code: str, tests_content: str, mode: str = "test") -> str:
+def run_eval(submission_code: str, tests_content: str, mode: str = "test", workspace_name: str = "nvfp4_gemv") -> str:
     """Run eval remotely with given submission and tests."""
     import sys
-    work = Path("/workspace/eval")
+    work = Path(f"/workspace/{workspace_name}")
     work.mkdir(exist_ok=True)
 
     # Write submission and tests
     (work / "submission.py").write_text(submission_code)
     (work / "tests.txt").write_text(tests_content)
+
+    # Get the correct eval script for this task
+    eval_script = EVAL_SCRIPTS.get(workspace_name, "eval.py")
 
     # Set up output capture via pipe
     r, w = os.pipe()
@@ -261,7 +287,7 @@ def run_eval(submission_code: str, tests_content: str, mode: str = "test") -> st
     env["POPCORN_FD"] = str(w)
 
     proc = subprocess.Popen(
-        [sys.executable, "eval_better_bench.py", mode, "tests.txt"],
+        [sys.executable, eval_script, mode, "tests.txt"],
         cwd=str(work), env=env, pass_fds=(w,),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )

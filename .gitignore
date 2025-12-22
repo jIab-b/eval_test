@@ -1,6 +1,8 @@
 venv/
 out/
 gemv_subs/
+gemm_subs/
+gemm_dual_subs/
 reconstructed/
 .claude/
 *.pyc
