@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 import torch.cuda
+# Initialize CUDA context early, before cutlass imports
+# This prevents CUDA context issues in spawned subprocesses
+torch.cuda.init()
+
 from cutlass.cute.nvgpu.common import OpError
 
 from utils import set_seed, clear_l2_cache
@@ -145,6 +149,9 @@ def _run_single_test(test: TestCase):
     """
     Runs a single test case. Do not call directly
     """
+    import cutlass
+    torch.cuda.init()
+    cutlass.cuda.initialize_cuda_context()
     from submission import custom_kernel
 
     data = generate_input(**test.args)
@@ -211,6 +218,11 @@ def run_testing(
 def _call_compile_kernel():
     """Helper to call compile_kernel with appropriate arguments."""
     import inspect
+    import cutlass
+    # Initialize CUDA context before importing submission
+    # This ensures module-level CUDA code in submissions works correctly
+    torch.cuda.init()
+    cutlass.cuda.initialize_cuda_context()
     try:
         from submission import compile_kernel
     except ImportError:
@@ -258,6 +270,10 @@ def _run_single_benchmark(
     """
     Runs one benchmark. Do not call directly.
     """
+    # Initialize CUDA context before importing submission
+    import cutlass
+    torch.cuda.init()
+    cutlass.cuda.initialize_cuda_context()
     from submission import custom_kernel
 
     durations = []
@@ -402,6 +418,9 @@ def run_single_profile(test: TestCase) -> str:
     """
     Runs a single test case. Do not call directly
     """
+    import cutlass
+    torch.cuda.init()
+    cutlass.cuda.initialize_cuda_context()
     from submission import custom_kernel
     from torch.profiler import profile, record_function, ProfilerActivity
 
