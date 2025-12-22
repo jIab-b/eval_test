@@ -208,16 +208,42 @@ def run_testing(
         return 112
 
 
+def _call_compile_kernel():
+    """Helper to call compile_kernel with appropriate arguments."""
+    import inspect
+    try:
+        from submission import compile_kernel
+    except ImportError:
+        return  # compile_kernel is optional
+
+    sig = inspect.signature(compile_kernel)
+    params = sig.parameters
+
+    if not params:
+        compile_kernel()
+    else:
+        # Check if all params have defaults or we can provide values
+        kwargs = {}
+        for name, param in params.items():
+            if name == 'use_loop':
+                kwargs['use_loop'] = True
+            elif param.default is not inspect.Parameter.empty:
+                # Has default, don't need to provide
+                pass
+            else:
+                # Required param we can't provide - skip pre-compilation
+                # Kernel will compile on first benchmark run
+                return
+        compile_kernel(**kwargs)
+
+
 def _compile_kernel_once():
     """
     Compile the kernel once before any benchmarking.
     This ensures compilation time is not included in benchmark results.
     """
-    from submission import compile_kernel
-    
     try:
-        # Trigger compilation (will be cached)
-        compile_kernel()
+        _call_compile_kernel()
         torch.cuda.synchronize()
         return True, None
     except OpError as E:
@@ -232,16 +258,16 @@ def _run_single_benchmark(
     """
     Runs one benchmark. Do not call directly.
     """
-    from submission import custom_kernel, compile_kernel
+    from submission import custom_kernel
 
     durations = []
     # generate input data once
     data = generate_input(**test.args)
     check_copy = _clone_data(data)
-    
+
     # Ensure kernel is compiled before any timing (compilation is cached)
     try:
-        compile_kernel()
+        _call_compile_kernel()
         torch.cuda.synchronize()
     except OpError as E:
         return f"Compilation failed: {E}"
