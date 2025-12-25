@@ -1,8 +1,8 @@
 #!/bin/bash
-# Run all gemm tests from gemm_subs in a single container
-# Usage: ./run_all_gemm.sh [mode] [-o output_dir]
-# Example: ./run_all_gemm.sh benchmark
-# Example: ./run_all_gemm.sh benchmark -o /path/to/output/
+# Run all dual gemm tests from dual_gemm_subs in a single container
+# Usage: ./run_all_dual.sh [mode] [-o output_dir]
+# Example: ./run_all_dual.sh benchmark
+# Example: ./run_all_dual.sh benchmark -o /path/to/output/
 
 set -e
 
@@ -34,10 +34,10 @@ if [ -z "$OUTPUT_DIR" ]; then
     OUTPUT_DIR="$PROJECT_ROOT/out"
 fi
 
-echo "Running all gemm tests (mode: $MODE)"
+echo "Running all dual gemm tests (mode: $MODE)"
 echo "Output dir: $OUTPUT_DIR"
 
 cd "$PROJECT_ROOT/modal"
-python cli.py -b "$PROJECT_ROOT/gemm_subs" -o "$OUTPUT_DIR" -m "$MODE" -t gemm
+python cli.py -b "$PROJECT_ROOT/dual_gemm_subs" -o "$OUTPUT_DIR" -m "$MODE" -t dual_gemm
 
 echo "Done!"

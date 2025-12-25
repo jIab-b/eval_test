@@ -170,3 +170,9 @@ def clear_l2_cache():
     # write stuff to
     dummy.fill_(42)
     del dummy
+
+
+def clear_l2_cache_large():
+    # create a large dummy tensor
+    dummy = torch.randn((16000, 1024, 1024), device="cuda")
+    del dummy

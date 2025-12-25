@@ -1,9 +1,9 @@
 #!/bin/bash
-# Run a single gemm test from gemm_subs
-# Usage: ./run_gemm.sh <submission_name> [mode] [-o output_file]
-# Example: ./run_gemm.sh 1mm test
-# Example: ./run_gemm.sh 2mm benchmark
-# Example: ./run_gemm.sh 1mm test -o /path/to/output.txt
+# Run a single dual gemm test from dual_gemm_subs
+# Usage: ./run_dual.sh <submission_name> [mode] [-o output_file]
+# Example: ./run_dual.sh sub_128 test
+# Example: ./run_dual.sh sub_2sm benchmark
+# Example: ./run_dual.sh sub_128 test -o /path/to/output.txt
 
 set -e
 
@@ -38,7 +38,7 @@ done
 if [ -z "$SUBMISSION" ]; then
     echo "Usage: $0 <submission_name> [mode] [-o output_file]"
     echo "Available submissions:"
-    ls "$PROJECT_ROOT/gemm_subs/" | sed 's/\.py$//'
+    ls "$PROJECT_ROOT/dual_gemm_subs/" | grep '\.py$' | grep -v ':' | sed 's/\.py$//'
     exit 1
 fi
 
@@ -47,7 +47,7 @@ if [[ ! "$SUBMISSION" == *.py ]]; then
     SUBMISSION="${SUBMISSION}.py"
 fi
 
-SUBMISSION_PATH="$PROJECT_ROOT/gemm_subs/$SUBMISSION"
+SUBMISSION_PATH="$PROJECT_ROOT/dual_gemm_subs/$SUBMISSION"
 
 if [ ! -f "$SUBMISSION_PATH" ]; then
     echo "Error: Submission not found: $SUBMISSION_PATH"
@@ -58,13 +58,13 @@ fi
 BASENAME="${SUBMISSION%.py}"
 if [ -z "$OUTPUT_FILE" ]; then
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    OUTPUT_FILE="$PROJECT_ROOT/out/gemm_${BASENAME}_${MODE}_${TIMESTAMP}.txt"
+    OUTPUT_FILE="$PROJECT_ROOT/out/dual_gemm_${BASENAME}_${MODE}_${TIMESTAMP}.txt"
 fi
 
-echo "Running gemm test: $SUBMISSION (mode: $MODE)"
+echo "Running dual gemm test: $SUBMISSION (mode: $MODE)"
 echo "Output: $OUTPUT_FILE"
 
 cd "$PROJECT_ROOT/modal"
-python cli.py "$SUBMISSION_PATH" -o "$OUTPUT_FILE" -m "$MODE" -t gemm
+python cli.py "$SUBMISSION_PATH" -o "$OUTPUT_FILE" -m "$MODE" -t dual_gemm
 
 echo "Done! Results saved to: $OUTPUT_FILE"
