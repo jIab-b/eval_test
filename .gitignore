@@ -1,7 +1,6 @@
 venv/
 out/
 
-reconstructed/
 .claude/
 *.pyc
 __pycache__/
