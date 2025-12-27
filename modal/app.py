@@ -87,6 +87,43 @@ def _gpu_type(name: str | None = None) -> str:
     return GPU_ALIASES.get(alias, alias)
 
 
+def _cpu_model_name() -> str:
+    import platform
+
+    cpu = platform.processor()
+    if cpu:
+        return cpu
+
+    try:
+        with open("/proc/cpuinfo", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.lower().startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+
+    return "Unknown"
+
+
+def _system_info() -> dict[str, str | int]:
+    import platform
+    import torch
+
+    has_cuda = torch.cuda.is_available()
+    gpu = torch.cuda.get_device_name(0) if has_cuda and torch.cuda.device_count() > 0 else "CPU"
+    device_count = torch.cuda.device_count() if has_cuda else 0
+
+    return {
+        "gpu": gpu,
+        "cpu": _cpu_model_name(),
+        "device_count": device_count,
+        "runtime": "CUDA" if has_cuda else "CPU",
+        "platform": platform.platform(),
+        "torch": str(torch.__version__),
+        "hostname": platform.node(),
+    }
+
+
 app = modal.App(APP_NAME)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 image = _build_image()
@@ -271,7 +308,7 @@ EVAL_SCRIPTS = {
 
 
 @app.function(image=image, volumes={str(VOLUME_MOUNT_PATH): volume}, gpu=_gpu_type(), timeout=600)
-def run_eval(submission_code: str, tests_content: str, mode: str = "test", workspace_name: str = "nvfp4_gemv") -> str:
+def run_eval(submission_code: str, tests_content: str, mode: str = "test", workspace_name: str = "nvfp4_gemv") -> dict:
     """Run eval remotely with given submission and tests."""
     import sys
     work = Path(f"{VOLUME_MOUNT_PATH}/{workspace_name}")
@@ -301,9 +338,13 @@ def run_eval(submission_code: str, tests_content: str, mode: str = "test", works
     output = os.read(r, 1 << 20).decode()
     os.close(r)
 
-    if stderr:
-        output += f"\n--- stderr ---\n{stderr.decode()}"
-    return output
+    return {
+        "popcorn": output,
+        "stdout": stdout.decode(errors="replace"),
+        "stderr": stderr.decode(errors="replace"),
+        "mode": mode,
+        "system": _system_info(),
+    }
 
 
 __all__ = [
