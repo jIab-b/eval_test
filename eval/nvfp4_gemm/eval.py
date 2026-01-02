@@ -107,6 +107,12 @@ class Stats:
     worst: float
 
 
+@dataclasses.dataclass
+class BenchmarkResult:
+    stats: Optional[Stats]
+    error: Optional[str]
+
+
 def calculate_stats(durations: list[int]):
     """
     Calculate statistical data from a list of durations.
@@ -266,9 +272,10 @@ def _compile_kernel_once():
 
 def _run_single_benchmark(
     test: TestCase, recheck: bool, max_repeats: int, max_time_ns: float
-) -> Stats | Any:
+) -> BenchmarkResult:
     """
     Runs one benchmark. Do not call directly.
+    Returns BenchmarkResult with stats (if timing completed) and error (if correctness failed).
     """
     # Initialize CUDA context before importing submission
     import cutlass
@@ -277,6 +284,7 @@ def _run_single_benchmark(
     from submission import custom_kernel
 
     durations = []
+    correctness_error = None
     # generate input data once
     data = generate_input(**test.args)
     check_copy = _clone_data(data)
@@ -286,18 +294,19 @@ def _run_single_benchmark(
         _call_compile_kernel()
         torch.cuda.synchronize()
     except OpError as E:
-        return f"Compilation failed: {E}"
+        return BenchmarkResult(stats=None, error=f"Compilation failed: {E}")
     except Exception as E:
-        return f"Compilation failed: {E}"
-    
+        return BenchmarkResult(stats=None, error=f"Compilation failed: {E}")
+
     #  first, one obligatory correctness check
     try:
         output = custom_kernel(_clone_data(data))
     except OpError as E:
-        return f"Encountered {E}"
+        return BenchmarkResult(stats=None, error=f"Encountered {E}")
     good, message = check_implementation(check_copy, output)
     if not good:
-        return message
+        # Record error but continue with timing
+        correctness_error = message
 
     # now, do multiple timing runs without further correctness testing
     # there is an upper bound of 200 runs, and a lower bound of 3 runs;
@@ -326,8 +335,9 @@ def _run_single_benchmark(
 
         if recheck:
             good, message = check_implementation(check_copy, output)
-            if not good:
-                return message
+            if not good and correctness_error is None:
+                # Record first correctness error but continue timing
+                correctness_error = message
 
         del output
         durations.append(duration)
@@ -346,7 +356,7 @@ def _run_single_benchmark(
             ):
                 break
 
-    return calculate_stats(durations)
+    return BenchmarkResult(stats=calculate_stats(durations), error=correctness_error)
 
 
 def run_single_benchmark(
@@ -388,7 +398,7 @@ def run_benchmarking(
         logger.log("compile.error", compile_error)
         return 112
     logger.log("compile", "pass")
-    
+
     # Step 2: Warm up with compiled kernel
     run_single_benchmark(pool, tests[0], False, 200, 10e7)
 
@@ -398,13 +408,18 @@ def run_benchmarking(
     for idx, test in enumerate(tests):
         logger.log(f"benchmark.{idx}.spec", test.spec)
         result = run_single_benchmark(pool, test, False, 200, 10e9)
-        if isinstance(result, Stats):
+        # Log timing stats if available (even if correctness failed)
+        if result.stats is not None:
             for field in dataclasses.fields(Stats):
-                logger.log(f"benchmark.{idx}.{field.name}", getattr(result, field.name))
-        else:
+                logger.log(f"benchmark.{idx}.{field.name}", getattr(result.stats, field.name))
+        # Log error if present (shape mismatch, etc.)
+        if result.error is not None:
             passed = False
             logger.log(f"benchmark.{idx}.status", "fail")
-            logger.log(f"benchmark.{idx}.error", result)
+            logger.log(f"benchmark.{idx}.error", result.error)
+        elif result.stats is None:
+            passed = False
+            logger.log(f"benchmark.{idx}.status", "fail")
 
     if passed:
         logger.log("check", "pass")
@@ -481,28 +496,31 @@ def main():
                     logger.log("compile.error", compile_error)
                     return 112
                 logger.log("compile", "pass")
-                
+
                 # Step 2: Warmup with compiled kernel
                 run_single_benchmark(pool, tests[0], False, 200, 1e7)
-                
+
                 # Step 3: Run leaderboard benchmarks (compilation time excluded)
                 logger.log("benchmark-count", len(tests))
                 passed = True
                 for i in range(len(tests)):
                     result = run_single_benchmark(pool, tests[i], True, 200, 30e9)
                     logger.log(f"benchmark.{i}.spec", tests[i].spec)
-                    if isinstance(result, Stats):
+                    # Log timing stats if available (even if correctness failed)
+                    if result.stats is not None:
                         for field in dataclasses.fields(Stats):
                             logger.log(
                                 f"benchmark.{i}.{field.name}",
-                                getattr(result, field.name),
+                                getattr(result.stats, field.name),
                             )
-                    else:
+                    # Log error if present (shape mismatch, etc.)
+                    if result.error is not None:
                         passed = False
                         logger.log(f"benchmark.{i}.status", "fail")
-                        logger.log(
-                            f"benchmark.{i}.error", str(result)
-                        )  # TODO: Make sure result implements __str__?
+                        logger.log(f"benchmark.{i}.error", result.error)
+                    elif result.stats is None:
+                        passed = False
+                        logger.log(f"benchmark.{i}.status", "fail")
                         break
 
                 logger.log("check", "pass" if passed else "fail")

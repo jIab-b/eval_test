@@ -105,6 +105,12 @@ class Stats:
     worst: float
 
 
+@dataclasses.dataclass
+class BenchmarkResult:
+    stats: Optional[Stats]
+    error: Optional[str]
+
+
 def calculate_stats(durations: list[int]):
     """
     Calculate statistical data from a list of durations.
@@ -202,14 +208,16 @@ def run_testing(
 
 def _run_single_benchmark(
     test: TestCase, recheck: bool, max_repeats: int, max_time_ns: float
-) -> Stats | Any:
+) -> BenchmarkResult:
     """
     Runs one benchmark. Do not call directly.
+    Returns BenchmarkResult with stats (if timing completed) and error (if correctness failed).
     """
     from submission import custom_kernel
 
     durations = []
     data_list = []
+    correctness_error = None
     # generate input data once
 
     for i in range(NUM_ITERATIONS_PER_BENCHMARK):
@@ -227,11 +235,13 @@ def _run_single_benchmark(
             output = custom_kernel(_clone_data(data))
             outputs.append(output)
     except Exception as E:
-        return f"Encountered {E}"
+        return BenchmarkResult(stats=None, error=f"Encountered {E}")
     for reference_output, custom_output in zip(check_copy, outputs):
         good, message = check_implementation(reference_output, custom_output)
         if not good:
-            return message
+            # Record error but continue with timing
+            correctness_error = message
+            break
 
     # now, do multiple timing runs without further correctness testing
     # there is an upper bound of 200 runs, and a lower bound of 3 runs;
@@ -259,8 +269,10 @@ def _run_single_benchmark(
         if recheck:
             for reference_output, custom_output in zip(check_copy, outputs):
                 good, message = check_implementation(reference_output, custom_output)
-            if not good:
-                return message
+                if not good and correctness_error is None:
+                    # Record first correctness error but continue timing
+                    correctness_error = message
+                    break
 
         durations.append(duration)
 
@@ -280,7 +292,7 @@ def _run_single_benchmark(
             ):
                 break
 
-    return calculate_stats(durations)
+    return BenchmarkResult(stats=calculate_stats(durations), error=correctness_error)
 
 
 def run_single_benchmark(
@@ -322,13 +334,18 @@ def run_benchmarking(
     for idx, test in enumerate(tests):
         logger.log(f"benchmark.{idx}.spec", test.spec)
         result = run_single_benchmark(pool, test, False, 200, 10e9)
-        if isinstance(result, Stats):
+        # Log timing stats if available (even if correctness failed)
+        if result.stats is not None:
             for field in dataclasses.fields(Stats):
-                logger.log(f"benchmark.{idx}.{field.name}", getattr(result, field.name))
-        else:
+                logger.log(f"benchmark.{idx}.{field.name}", getattr(result.stats, field.name))
+        # Log error if present (shape mismatch, etc.)
+        if result.error is not None:
             passed = False
             logger.log(f"benchmark.{idx}.status", "fail")
-            logger.log(f"benchmark.{idx}.error", result)
+            logger.log(f"benchmark.{idx}.error", result.error)
+        elif result.stats is None:
+            passed = False
+            logger.log(f"benchmark.{idx}.status", "fail")
 
     if passed:
         logger.log("check", "pass")
@@ -471,18 +488,21 @@ def main():
                 for i in range(len(tests)):
                     result = run_single_benchmark(pool, tests[i], True, 200, 30e9)
                     logger.log(f"benchmark.{i}.spec", tests[i].spec)
-                    if isinstance(result, Stats):
+                    # Log timing stats if available (even if correctness failed)
+                    if result.stats is not None:
                         for field in dataclasses.fields(Stats):
                             logger.log(
                                 f"benchmark.{i}.{field.name}",
-                                getattr(result, field.name),
+                                getattr(result.stats, field.name),
                             )
-                    else:
+                    # Log error if present (shape mismatch, etc.)
+                    if result.error is not None:
                         passed = False
                         logger.log(f"benchmark.{i}.status", "fail")
-                        logger.log(
-                            f"benchmark.{i}.error", str(result)
-                        )  # TODO: Make sure result implements __str__?
+                        logger.log(f"benchmark.{i}.error", result.error)
+                    elif result.stats is None:
+                        passed = False
+                        logger.log(f"benchmark.{i}.status", "fail")
                         break
 
                 logger.log("check", "pass" if passed else "fail")

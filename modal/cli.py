@@ -139,14 +139,16 @@ def _format_benchmarks(benchmarks: dict[int, dict[str, str]]) -> list[str]:
         best = _to_float(info.get("best"))
         worst = _to_float(info.get("worst"))
 
+        # Show timing if available (even if correctness failed)
+        if None not in (mean, err, best, worst):
+            lines.append(f" {STOPWATCH} {mean / 1000:.1f} \u00b1 {err / 1000:.2f} {MICRO}s")
+            lines.append(f" {ZAP} {best / 1000:.1f} {MICRO}s {SNAIL} {worst / 1000:.1f} {MICRO}s")
+        # Show error if present
         if status == "fail" or error:
             if error:
                 lines.append(f" {CROSS} {error}")
             else:
                 lines.append(f" {CROSS} failed")
-        elif None not in (mean, err, best, worst):
-            lines.append(f" {STOPWATCH} {mean / 1000:.1f} \u00b1 {err / 1000:.2f} {MICRO}s")
-            lines.append(f" {ZAP} {best / 1000:.1f} {MICRO}s {SNAIL} {worst / 1000:.1f} {MICRO}s")
 
         if idx != items[-1][0]:
             lines.append("")
