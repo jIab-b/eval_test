@@ -6,7 +6,7 @@ import torch.cuda
 from common.eval_base import EvalRunner, main
 
 
-class DualGemmEvalRunner(EvalRunner):
+class GemvEvalRunner(EvalRunner):
     use_cutlass = False
     use_batched_benchmark = True
     batch_size = 50
@@ -26,4 +26,4 @@ class DualGemmEvalRunner(EvalRunner):
 
 
 if __name__ == "__main__":
-    sys.exit(main(DualGemmEvalRunner()))
+    sys.exit(main(GemvEvalRunner()))

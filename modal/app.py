@@ -228,8 +228,8 @@ MANIFEST_PATH = "/manifest.json"
 EVAL_DIR = PROJECT_ROOT / "eval"
 
 # Task directories to sync (each becomes /workspace/{dir_name}/)
-# Each task folder is self-contained with its own utils.py, reference.py, task.py, eval_better_bench.py
-TASK_DIRS = ["nvfp4_gemv", "nvfp4_gemm", "nvfp4_dual_gemm"]
+# common/ contains shared utilities used by all tasks
+TASK_DIRS = ["common", "nvfp4_gemv", "nvfp4_gemm", "nvfp4_dual_gemm"]
 
 
 def _file_hash(path: Path) -> str:
@@ -301,7 +301,7 @@ def sync_project() -> int:
 # --- Remote eval ---
 # Eval script name per task
 EVAL_SCRIPTS = {
-    "nvfp4_gemv": "eval_better_bench.py",
+    "nvfp4_gemv": "eval.py",
     "nvfp4_gemm": "eval.py",
     "nvfp4_dual_gemm": "eval.py",
 }
