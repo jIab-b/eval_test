@@ -77,9 +77,45 @@ def verbose_allequal(received: torch.Tensor, expected: torch.Tensor, max_print: 
     return []
 
 
+def _compare_nested(received, expected, rtol=1e-05, atol=1e-08, path: str = "") -> list[str]:
+    if isinstance(received, torch.Tensor) and isinstance(expected, torch.Tensor):
+        reasons = verbose_allclose(received, expected, rtol=rtol, atol=atol)
+        if len(reasons) == 0:
+            return []
+        prefix = f"{path}: " if path else ""
+        return [prefix + reason for reason in reasons]
+
+    if isinstance(received, (list, tuple)) and isinstance(expected, (list, tuple)):
+        if len(received) != len(expected):
+            prefix = f"{path}: " if path else ""
+            return [prefix + "LENGTH MISMATCH"]
+        reasons = []
+        for i, (rec_item, exp_item) in enumerate(zip(received, expected)):
+            child_path = f"{path}[{i}]" if path else f"[{i}]"
+            reasons.extend(_compare_nested(rec_item, exp_item, rtol=rtol, atol=atol, path=child_path))
+            if len(reasons) > 0:
+                return reasons
+        return []
+
+    if isinstance(received, dict) and isinstance(expected, dict):
+        if set(received.keys()) != set(expected.keys()):
+            prefix = f"{path}: " if path else ""
+            return [prefix + "KEY MISMATCH"]
+        reasons = []
+        for key in sorted(received.keys()):
+            child_path = f"{path}.{key}" if path else str(key)
+            reasons.extend(_compare_nested(received[key], expected[key], rtol=rtol, atol=atol, path=child_path))
+            if len(reasons) > 0:
+                return reasons
+        return []
+
+    prefix = f"{path}: " if path else ""
+    return [prefix + "TYPE MISMATCH"]
+
+
 def match_reference(data, output, reference: callable, rtol=1e-05, atol=1e-08) -> tuple[bool, str]:
     expected = reference(data)
-    reasons = verbose_allclose(output, expected, rtol=rtol, atol=atol)
+    reasons = _compare_nested(output, expected, rtol=rtol, atol=atol)
     if len(reasons) > 0:
         return False, "mismatch found! custom implementation doesn't match reference: " + " ".join(reasons)
     return True, ""

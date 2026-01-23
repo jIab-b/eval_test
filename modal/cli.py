@@ -15,6 +15,7 @@ TASKS = {
     "gemv": "nvfp4_gemv",
     "gemm": "nvfp4_gemm",
     "dual_gemm": "nvfp4_dual_gemm",
+    "grouped_gemm": "nvfp4_grouped_gemm",
 }
 
 CHECK = "\u2705"
@@ -57,7 +58,7 @@ def _reorder_spec(spec: str) -> str:
     if not kv:
         return spec.strip()
 
-    order = ["k", "l", "m", "n", "seed"]
+    order = ["k", "l", "m", "n", "g", "seed"]
     ordered = [f"{key}: {kv[key]}" for key in order if key in kv]
     remaining = sorted(k for k in kv.keys() if k not in order)
     ordered.extend(f"{key}: {kv[key]}" for key in remaining)

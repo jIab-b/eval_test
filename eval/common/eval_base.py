@@ -1,3 +1,4 @@
+import ast
 import base64
 import dataclasses
 import multiprocessing
@@ -67,21 +68,36 @@ def get_test_cases(file_name: str, seed: Optional[int]) -> list[TestCase]:
 
     tests = []
     lines = content.splitlines()
-    match = r"\s*([a-zA-Z]+):\s*([a-zA-Z]+|[+-]?[0-9]+)\s*"
     for line in lines:
         parts = line.split(";")
         case = {}
         for part in parts:
-            matched = re.match(match, part)
-            if not re.fullmatch(match, part):
+            if not part.strip():
+                continue
+            key, sep, raw_val = part.partition(":")
+            if not sep:
                 print(f"invalid test case: '{line}': '{part}'", file=sys.stderr)
                 exit(113)
-            key = matched[1]
-            val = matched[2]
-            try:
-                val = int(val)
-            except ValueError:
-                pass
+            key = key.strip()
+            raw_val = raw_val.strip()
+            if not key or not raw_val or not re.fullmatch(r"[a-zA-Z_]+", key):
+                print(f"invalid test case: '{line}': '{part}'", file=sys.stderr)
+                exit(113)
+
+            if raw_val[0] in "[(" and raw_val[-1] in "])":
+                try:
+                    val = ast.literal_eval(raw_val)
+                except (SyntaxError, ValueError):
+                    print(f"invalid test case: '{line}': '{part}'", file=sys.stderr)
+                    exit(113)
+            else:
+                try:
+                    val = int(raw_val)
+                except ValueError:
+                    if not re.fullmatch(r"[a-zA-Z_]+", raw_val):
+                        print(f"invalid test case: '{line}': '{part}'", file=sys.stderr)
+                        exit(113)
+                    val = raw_val
             case[key] = val
         tests.append(TestCase(spec=line, args=case))
 

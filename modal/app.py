@@ -229,7 +229,7 @@ EVAL_DIR = PROJECT_ROOT / "eval"
 
 # Task directories to sync (each becomes /workspace/{dir_name}/)
 # common/ contains shared utilities used by all tasks
-TASK_DIRS = ["common", "nvfp4_gemv", "nvfp4_gemm", "nvfp4_dual_gemm"]
+TASK_DIRS = ["common", "nvfp4_gemv", "nvfp4_gemm", "nvfp4_dual_gemm", "nvfp4_grouped_gemm"]
 
 
 def _file_hash(path: Path) -> str:
@@ -304,6 +304,7 @@ EVAL_SCRIPTS = {
     "nvfp4_gemv": "eval.py",
     "nvfp4_gemm": "eval.py",
     "nvfp4_dual_gemm": "eval.py",
+    "nvfp4_grouped_gemm": "eval.py",
 }
 
 
