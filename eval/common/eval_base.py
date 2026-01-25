@@ -138,9 +138,9 @@ class EvalRunner:
     """Base class for evaluation runners. Override methods as needed."""
 
     use_cutlass = False  # Set True to catch OpError
-    use_batched_benchmark = False  # Set True for batched iterations
-    batch_size = 50  # Number of iterations per benchmark batch
-    use_large_cache_clear = False  # Use clear_l2_cache_large
+    use_batched_benchmark = True  # Use batched iterations for more stable timing
+    batch_size = 15  # Number of iterations per benchmark batch
+    use_large_cache_clear = True  # Use clear_l2_cache_large for B200
 
     def __init__(self):
         self._custom_kernel = None
@@ -284,8 +284,8 @@ class EvalRunner:
             del output
             durations.append(duration)
 
-            if i > 1:
-                total_bm_duration = time.perf_counter_ns() - bm_start_time
+            total_bm_duration = time.perf_counter_ns() - bm_start_time
+            if i > 1 and total_bm_duration > 1e8:  # at least 2 runs and 100ms total
                 stats = calculate_stats(durations)
                 if (stats.err / stats.mean < 0.001 or
                     stats.mean * stats.runs > max_time_ns or
@@ -446,13 +446,13 @@ def run_benchmarking(logger: PopcornOutput, pool: multiprocessing.Pool, tests: l
         logger.log("compile", "pass")
 
     # Warmup
-    pool.apply(_make_benchmark_runner, (runner, tests[0], False, 200, 10e7))
+    pool.apply(_make_benchmark_runner, (runner, tests[0], False, 100, 10e7))
 
     passed = True
     logger.log("benchmark-count", len(tests))
     for idx, test in enumerate(tests):
         logger.log(f"benchmark.{idx}.spec", test.spec)
-        result = pool.apply(_make_benchmark_runner, (runner, test, False, 200, 10e9))
+        result = pool.apply(_make_benchmark_runner, (runner, test, False, 100, 10e9))
         if result.stats is not None:
             for field in dataclasses.fields(Stats):
                 logger.log(f"benchmark.{idx}.{field.name}", getattr(result.stats, field.name))
@@ -479,13 +479,14 @@ def run_leaderboard(logger: PopcornOutput, pool: multiprocessing.Pool, tests: li
             return 112
         logger.log("compile", "pass")
 
-    # Warmup
-    pool.apply(_make_benchmark_runner, (runner, tests[0], False, 200, 1e7))
+    # Warmup all test shapes to ensure consistent benchmarking
+    for test in tests:
+        pool.apply(_make_benchmark_runner, (runner, test, False, 50, 5e8))
 
     logger.log("benchmark-count", len(tests))
     passed = True
     for i, test in enumerate(tests):
-        result = pool.apply(_make_benchmark_runner, (runner, test, True, 200, 30e9))
+        result = pool.apply(_make_benchmark_runner, (runner, test, True, 100, 30e9))
         logger.log(f"benchmark.{i}.spec", test.spec)
         if result.stats is not None:
             for field in dataclasses.fields(Stats):
