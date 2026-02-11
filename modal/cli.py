@@ -358,25 +358,32 @@ def run_batch(
     tests_content = tests_file.read_text()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    _log(f"Running {len(submissions)} submissions in batch mode (task: {task}, mode: {mode})")
+    _log(f"Running {len(submissions)} submissions in parallel (task: {task}, mode: {mode})")
 
-    # Run all submissions in a single app.run() context
     with app.run():
+        # Launch all submissions in parallel
+        handles = []
         for submission in submissions:
+            submission_code = submission.read_text()
+            handle = run_eval.spawn(submission_code, tests_content, mode, workspace_name)
+            handles.append((submission, handle))
+            _log(f"  Spawned {submission.stem}")
+
+        # Collect results as they complete
+        for i, (submission, handle) in enumerate(handles):
             basename = submission.stem
             output_file = output_dir / f"{basename}.txt"
 
-            _log(f"  [{submissions.index(submission)+1}/{len(submissions)}] {basename}...")
-
+            _log(f"  [{i+1}/{len(submissions)}] Waiting for {basename}...")
             try:
-                submission_code = submission.read_text()
-                result = run_eval.remote(submission_code, tests_content, mode, workspace_name)
+                result = handle.get()
                 formatted = _format_result(result, mode)
                 output_file.write_text(formatted)
                 if not suppress_stdout:
                     print(formatted)
+                _log(f"  [{i+1}/{len(submissions)}] {basename} done")
             except Exception as e:
-                _log(f"FAILED: {e}")
+                _log(f"  [{i+1}/{len(submissions)}] {basename} FAILED: {e}")
                 output_file.write_text(f"Error: {e}")
 
     _log(f"Batch complete. Results in: {output_dir}")
