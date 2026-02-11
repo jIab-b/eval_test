@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 import modal
-from app import app, sync_project, run_eval
+from app import app, sync_project, run_eval, run_eval_batch
 
 PROJECT_ROOT = Path(__file__).parent.parent
 EVAL_ROOT = PROJECT_ROOT / "eval"
@@ -332,8 +332,9 @@ def run_batch(
     mode: str,
     task: str,
     suppress_stdout: bool,
+    batch_workers: int,
 ):
-    """Run all submissions in a directory in a single container."""
+    """Run all submissions in a directory."""
     task_dir = get_task_dir(task)
     workspace_name = TASKS[task]
 
@@ -358,33 +359,30 @@ def run_batch(
     tests_content = tests_file.read_text()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    _log(f"Running {len(submissions)} submissions in parallel (task: {task}, mode: {mode})")
+    worker_count = max(1, int(batch_workers))
+    _log(
+        f"Running {len(submissions)} submissions in ONE container "
+        f"(task: {task}, mode: {mode}, workers: {worker_count})"
+    )
+    payload = {submission.stem: submission.read_text() for submission in submissions}
 
     with app.run():
-        # Launch all submissions in parallel
-        handles = []
-        for submission in submissions:
-            submission_code = submission.read_text()
-            handle = run_eval.spawn(submission_code, tests_content, mode, workspace_name)
-            handles.append((submission, handle))
-            _log(f"  Spawned {submission.stem}")
+        results = run_eval_batch.remote(payload, tests_content, mode, workspace_name, worker_count)
 
-        # Collect results as they complete
-        for i, (submission, handle) in enumerate(handles):
-            basename = submission.stem
-            output_file = output_dir / f"{basename}.txt"
+    for i, submission in enumerate(submissions):
+        basename = submission.stem
+        output_file = output_dir / f"{basename}.txt"
+        result = results.get(basename)
+        if result is None:
+            output_file.write_text("Error: missing result from run_eval_batch")
+            _log(f"  [{i+1}/{len(submissions)}] {basename} FAILED: missing result")
+            continue
 
-            _log(f"  [{i+1}/{len(submissions)}] Waiting for {basename}...")
-            try:
-                result = handle.get()
-                formatted = _format_result(result, mode)
-                output_file.write_text(formatted)
-                if not suppress_stdout:
-                    print(formatted)
-                _log(f"  [{i+1}/{len(submissions)}] {basename} done")
-            except Exception as e:
-                _log(f"  [{i+1}/{len(submissions)}] {basename} FAILED: {e}")
-                output_file.write_text(f"Error: {e}")
+        formatted = _format_result(result, mode)
+        output_file.write_text(formatted)
+        if not suppress_stdout:
+            print(formatted)
+        _log(f"  [{i+1}/{len(submissions)}] {basename} done")
 
     _log(f"Batch complete. Results in: {output_dir}")
 
@@ -396,7 +394,13 @@ def main():
     parser.add_argument("-m", "--mode", default="benchmark", choices=["test", "benchmark", "leaderboard", "profile"])
     parser.add_argument("-t", "--task", default="gemv", choices=list(TASKS.keys()),
                         help="Task to run (default: gemv)")
-    parser.add_argument("-b", "--batch", metavar="DIR", help="Run all .py files in DIR in a single container")
+    parser.add_argument("-b", "--batch", metavar="DIR", help="Run all .py files in DIR")
+    parser.add_argument(
+        "--batch-workers",
+        type=int,
+        default=1,
+        help="Number of worker subprocesses inside the one batch container.",
+    )
     parser.add_argument("--no-sync", action="store_true", help="Skip syncing project files")
     parser.add_argument(
         "--supress",
@@ -416,7 +420,14 @@ def main():
             raise FileNotFoundError(f"Batch directory not found: {args.batch}")
 
         output_dir = Path(args.output)
-        run_batch(submissions_dir, output_dir, args.mode, args.task, args.suppress_stdout)
+        run_batch(
+            submissions_dir,
+            output_dir,
+            args.mode,
+            args.task,
+            args.suppress_stdout,
+            batch_workers=args.batch_workers,
+        )
     else:
         # Single submission mode
         if not args.submission:

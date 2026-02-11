@@ -348,6 +348,104 @@ def run_eval(submission_code: str, tests_content: str, mode: str = "test", works
     }
 
 
+@app.function(image=image, volumes={str(VOLUME_MOUNT_PATH): volume}, gpu=_gpu_type(), timeout=1800)
+def run_eval_batch(
+    submissions: dict[str, str],
+    tests_content: str,
+    mode: str = "test",
+    workspace_name: str = "nvfp4_gemv",
+    workers: int = 1,
+) -> dict[str, dict]:
+    """Run many submissions inside one GPU container (optional in-container parallelism)."""
+    import sys
+    import concurrent.futures
+
+    work = Path(f"{VOLUME_MOUNT_PATH}/{workspace_name}")
+    work.mkdir(exist_ok=True)
+    eval_script = EVAL_SCRIPTS.get(workspace_name, "eval.py")
+
+    # Keep eval.py's local imports intact; provide submission.py via PYTHONPATH per worker.
+    stale_submission = work / "submission.py"
+    if stale_submission.exists():
+        stale_submission.unlink()
+
+    tests_path = work / "__batch_tests__.txt"
+    tests_path.write_text(tests_content)
+
+    submit_root = work / "__batch_submissions__"
+    submit_root.mkdir(parents=True, exist_ok=True)
+
+    system_info = _system_info()
+
+    def _run_one(item: tuple[str, str], idx: int) -> tuple[str, dict]:
+        name, code = item
+        safe = "".join(ch if (ch.isalnum() or ch in "._-") else "_" for ch in name)
+        subdir = submit_root / f"{idx:04d}_{safe}"
+        subdir.mkdir(parents=True, exist_ok=True)
+        (subdir / "submission.py").write_text(code)
+
+        r, w = os.pipe()
+        os.set_inheritable(w, True)
+        env = os.environ.copy()
+        env["POPCORN_FD"] = str(w)
+        old_pp = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = f"{subdir}:{old_pp}" if old_pp else str(subdir)
+
+        proc = subprocess.Popen(
+            [sys.executable, eval_script, mode, str(tests_path)],
+            cwd=str(work),
+            env=env,
+            pass_fds=(w,),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        os.close(w)
+
+        stdout, stderr = proc.communicate()
+        output = os.read(r, 1 << 20).decode()
+        os.close(r)
+
+        return name, {
+            "popcorn": output,
+            "stdout": stdout.decode(errors="replace"),
+            "stderr": stderr.decode(errors="replace"),
+            "mode": mode,
+            "system": system_info,
+        }
+
+    ordered = list(submissions.items())
+    worker_count = max(1, int(workers))
+    if worker_count > len(ordered):
+        worker_count = len(ordered)
+
+    results: dict[str, dict] = {}
+    if worker_count == 1:
+        for idx, item in enumerate(ordered):
+            name, result = _run_one(item, idx)
+            results[name] = result
+        return results
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as pool:
+        futs = [pool.submit(_run_one, item, idx) for idx, item in enumerate(ordered)]
+        for fut in concurrent.futures.as_completed(futs):
+            try:
+                name, result = fut.result()
+                results[name] = result
+            except Exception as e:
+                err = {
+                    "popcorn": "",
+                    "stdout": "",
+                    "stderr": f"run_eval_batch worker exception: {e}",
+                    "mode": mode,
+                    "system": system_info,
+                }
+                # Keep deterministic key if we can, otherwise use synthetic name.
+                key = f"batch_worker_error_{len(results)}"
+                results[key] = err
+
+    return results
+
+
 __all__ = [
     "app",
     "image",
@@ -361,4 +459,5 @@ __all__ = [
     "sync_outputs",
     "sync_project",
     "run_eval",
+    "run_eval_batch",
 ]
